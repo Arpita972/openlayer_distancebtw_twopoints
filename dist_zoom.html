@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dist_zoom</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <link rel="stylesheet" href="./libs/v6.1.1-dist/ol.css" />
+    <link rel="stylesheet" href="style1.css" />
+</head>
+
+<body>
+    <div style="color:blue;font-weight: bold" , id="distance">Distance of Route will be shown here</div>
+    <div id="map"></div>
+    <div id="msg">Click to add a point.</div>
+
+
+
+
+    <script type="text/javascript" src="https://unpkg.com/default-passive-events"></script>
+    <script src="./libs/v6.1.1-dist/ol.js"></script>
+    <script src="https://cdn.maptiler.com/ol-mapbox-style/v4.3.1/olms.js"></script>
+
+
+    <script>
+        var points = [],
+            msg_el = document.getElementById("msg"),
+            url_osrm_nearest = "//router.project-osrm.org/nearest/v1/driving/",
+            url_osrm_route = "//router.project-osrm.org/route/v1/driving/",
+            icon_url = "//cdn.rawgit.com/openlayers/ol3/master/examples/data/icon.png",
+            vectorSource = new ol.source.Vector(),
+            vectorLayer = new ol.layer.Vector({
+                source: vectorSource,
+            }),
+            styles = {
+                route: new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        width: 3,
+                        color: [255, 0, 0, 0.8],
+                    }),
+                }),
+
+                icon: new ol.style.Style({
+                    image: new ol.style.Icon({
+                        anchor: [0.5, 1],
+                        src: "marker.png",
+                    }),
+                }),
+            };
+
+        console.clear();
+
+        var map = new ol.Map({
+            target: "map",
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.OSM(),
+                }),
+                vectorLayer,
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([85.0985, 20.9517]),
+                zoom: 7.7,
+            }),
+        });
+
+        //function to calulate distance
+        function distance(lat1, lon1, lat2, lon2, unit) {
+            if ((lat1 == lat2) && (lon1 == lon2)) {
+                return 0;
+            } else {
+                var radlat1 = Math.PI * lat1 / 180;
+                var radlat2 = Math.PI * lat2 / 180;
+                var theta = lon1 - lon2;
+                var radtheta = Math.PI * theta / 180;
+                var dist = Math.sin(radlat1) * Math.sin(radlat2) + Math.cos(radlat1) * Math.cos(radlat2) *
+                    Math.cos(radtheta);
+                if (dist > 1) {
+                    dist = 1;
+                }
+                dist = Math.acos(dist);
+                dist = dist * 180 / Math.PI;
+                dist = dist * 60 * 1.1515;
+                if (unit == "K") {
+                    dist = dist * 1.609344
+                }
+                if (unit == "N") {
+                    dist = dist * 0.8684
+                }
+                return dist;
+            }
+        }
+
+
+        map.on("click", function (evt) {
+            utils.getNearest(evt.coordinate).then(function (coord_street) {
+
+
+
+
+                var last_point = points[points.length - 1];
+                var points_length = points.push(coord_street);
+
+                utils.createFeature(coord_street);
+
+                if (points_length < 2) {
+                    msg_el.innerHTML = "Click to add another point";
+                    return;
+                }
+
+                //get the route
+                var point1 = last_point.join();
+                var point2 = coord_street.join();
+
+                fetch(url_osrm_route + point1 + ";" + point2)
+                    .then(function (r) {
+                        return r.json();
+                    })
+                    .then(function (json) {
+                        if (json.code !== "Ok") {
+                            msg_el.innerHTML = "No route found.";
+                            return;
+                        }
+                        msg_el.innerHTML = "Route added";
+                        points.length = 0;
+                        utils.createRoute(json.routes[0].geometry);
+                        const point1Arr = point1.split(",");
+                        console.log(point1Arr[1]);
+
+                        const point2Arr = point2.split(",");
+                        console.log(point2Arr[1]);
+
+                        let length = distance(point1Arr[1], point1Arr[0], point2Arr[1],
+                            point2Arr[0], "K");
+                        console.log(length);
+                        $("#distance").text(
+                            "The distance between points is: " +
+                            Math.round(length * 100) / 100 +
+                            " Km."
+                        );
+                    });
+
+
+                // //zoom effect
+                // map.getView().animate({
+                //     zoom: map.getView().getZoom() + 1,
+                //     duration: 250
+                // })
+
+                // //clear marker
+                // map.getLayers().forEach((layer) => {
+                //     if (layer && layer.get("name") === "marker") {
+                //         map.removeLayer(layer);
+                //     }
+                //     //console.log(layer );
+                // });
+
+            });
+        });
+
+        var utils = {
+            getNearest: function (coord) {
+                var coord4326 = utils.to4326(coord);
+                return new Promise(function (resolve, reject) {
+                    //make sure the coord is on street
+                    fetch(url_osrm_nearest + coord4326.join())
+                        .then(function (response) {
+                            // Convert to JSON
+                            return response.json();
+                        })
+                        .then(function (json) {
+                            if (json.code === "Ok") resolve(json.waypoints[0].location);
+                            else reject();
+                        });
+                });
+            },
+            createFeature: function (coord) {
+                var feature = new ol.Feature({
+                    type: "place",
+                    geometry: new ol.geom.Point(ol.proj.fromLonLat(coord)),
+                });
+                feature.setStyle(styles.icon);
+                vectorSource.set("name", "marker");
+                vectorSource.addFeature(feature);
+            },
+            createRoute: function (polyline) {
+                // route is ol.geom.LineString
+                var route = new ol.format.Polyline({
+                    factor: 1e5,
+                }).readGeometry(polyline, {
+                    dataProjection: "EPSG:4326",
+                    featureProjection: "EPSG:3857",
+                });
+                var feature = new ol.Feature({
+                    type: "route",
+                    geometry: route,
+                });
+                feature.setStyle(styles.route);
+                vectorSource.addFeature(feature);
+            },
+            to4326: function (coord) {
+                return ol.proj.transform(
+                    [parseFloat(coord[0]), parseFloat(coord[1])],
+                    "EPSG:3857",
+                    "EPSG:4326"
+                );
+            },
+        };
+
+
+
+
+
+
+        //Draw interaction box
+        const source = new ol.source.Vector({
+            wrapX: false
+        });
+        let draw; // global so we can remove it later
+        function addInteraction() {
+            let value = 'Box';
+            if (value !== 'None') {
+                let geometryFunction;
+                if (value === 'Square') {
+                    value = 'Circle';
+                    geometryFunction = ol.interaction.Draw.createRegularPolygon(4);
+                } else if (value === 'Box') {
+                    value = 'Circle';
+                    geometryFunction = ol.interaction.Draw.createBox();
+                } else if (value === 'Star') {
+                    value = 'Circle';
+                    geometryFunction = function (coordinates, geometry) {
+                        const center = coordinates[0];
+                        const last = coordinates[coordinates.length - 1];
+                        const dx = center[0] - last[0];
+                        const dy = center[1] - last[1];
+                        const radius = Math.sqrt(dx * dx + dy * dy);
+                        const rotation = Math.atan2(dy, dx);
+                        const newCoordinates = [];
+                        const numPoints = 12;
+                        for (let i = 0; i < numPoints; ++i) {
+                            const angle = rotation + (i * 2 * Math.PI) / numPoints;
+                            const fraction = i % 2 === 0 ? 1 : 0.5;
+                            const offsetX = radius * fraction * Math.cos(angle);
+                            const offsetY = radius * fraction * Math.sin(angle);
+                            newCoordinates.push([center[0] + offsetX, center[1] + offsetY]);
+                        }
+                        newCoordinates.push(newCoordinates[0].slice());
+                        if (!geometry) {
+                            geometry = new Polygon([newCoordinates]);
+                        } else {
+                            geometry.setCoordinates([newCoordinates]);
+                        }
+                        console.log(geometryFunction);
+                        return geometry;
+                    };
+                }
+                draw = new ol.interaction.Draw({
+                    source: source,
+                    type: value,
+                    geometryFunction: geometryFunction,
+                });
+                map.addInteraction(draw);
+            }
+        }
+
+        document.getElementById('drawshape').addEventListener('click', function () {
+            //draw.removeInteraction(draw);
+            addInteraction();
+        });
+    </script>
+
+</body>
+
+</html>
